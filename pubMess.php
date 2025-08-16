@@ -1,38 +1,54 @@
- <?php
-	function sendMessage($topic, $message, $mqtt)
-	{
-		if ($mqtt->connect())
-		{
-			$mqtt->publish($topic,$message,0,1);
-			return true;
-		}
-		else
-		{
-			return false;
-		}
-	}
+<?php
+require_once "resources/phpMQTT.php";
 
-	require("resources/phpMQTT.php");
-	$mqtt = new phpMQTT("192.168.1.20", 1883, "Web PHP MQTT Client", "ahmsNode", "ahms2013");
+/**
+ * Send a message via MQTT
+ */
+function sendMessage(string $topic, string $message, phpMQTT $mqtt): bool {
+    if ($mqtt->connect()) {
+        $mqtt->publish($topic, $message, 0, 1);
+        $mqtt->close();
+        return true;
+    }
+    return false;
+}
 
-	$message = trim($_GET["message"]);
-	$topic = trim($_GET["topic"]);
-	if (isset($message) && isset($topic) && strlen($message) > 0 && strlen($topic) > 0)
-	{
-		if(sendMessage($_GET["topic"], $_GET["message"], $mqtt))
-		{
-			$message = array ( "status" => "ok", "topic" => $topic, "message" => $message );
-			echo json_encode($message);
-		}
-		else
-		{
-			$message = array ( "status" => "failes to send message", "topic" => $topic, "message" => $message );
-			echo json_encode($message);
-		}
-	}
-	else
-	{
-		$message = array ( "status" => "invalid arguments", "topic" => $topic, "message" => $message );
-		echo json_encode($message);
-	}
-?>
+/**
+ * Standard JSON response
+ */
+function jsonResponse(string $status, string $topic = "", string $message = ""): void {
+    header("Content-Type: application/json");
+    echo json_encode([
+        "status"  => $status,
+        "topic"   => $topic,
+        "message" => $message
+    ]);
+    exit;
+}
+
+// ✅ Config (ideally from env vars or config file)
+$server     = "192.168.1.20";
+$port       = 1883;
+$clientId   = "Web PHP MQTT Client";
+$username   = "ahmsNode";
+$password   = "ahms2013";
+
+// ✅ Collect inputs safely
+$topic   = trim($_GET["topic"]   ?? "");
+$message = trim($_GET["message"] ?? "");
+
+// ✅ Validate input
+if ($topic === "" || $message === "") {
+    jsonResponse("invalid arguments", $topic, $message);
+}
+
+// ✅ Setup MQTT
+$mqtt = new phpMQTT($server, $port, $clientId, $username, $password);
+
+// ✅ Attempt publish
+if (sendMessage($topic, $message, $mqtt)) {
+    jsonResponse("ok", $topic, $message);
+} else {
+    jsonResponse("failed to send message", $topic, $message);
+}
+
