@@ -1,164 +1,130 @@
 <?php
-	include("resources/phpMQTT.php");
-	error_reporting(0);
+require_once "resources/phpMQTT.php";
 
-	$myServer = "not set";
-	$myPort = "not set";
-	$myUserName = "not set";
-	$myPassword = "not set";
-	$myIdentifier = "PHP MQTT Client";
+// Show errors in development (remove or adjust in production)
+ini_set("display_errors", 1);
+error_reporting(E_ALL);
 
-	if (validParam("server")) { $myServer = $_GET["server"]; }
-	if (validParam("port")) { $myPort = $_GET["port"]; }
-	if (validParam("userName")) { $myUserName = $_GET["userName"]; }
-	if (validParam("password")) { $myPassword = $_GET["password"]; }
+// Default connection config
+$config = [
+    "server"     => $_GET["server"]    ?? null,
+    "port"       => $_GET["port"]      ?? null,
+    "userName"   => $_GET["userName"]  ?? null,
+    "password"   => $_GET["password"]  ?? null,
+    "identifier" => "PHP MQTT Client"
+];
 
-	if (validParam("action"))
-	{
-		switch($_GET["action"])
-		{
-			case "getTopic": getTopic(); break;
-			case "pubMess": pubMess(); break;
-			default: 
-				displayJson("invalid action", "", ""); break;
-		}
-	}
+// Dispatcher
+$action = $_GET["action"] ?? null;
+switch ($action) {
+    case "getTopic":
+        getTopic($config);
+        break;
+    case "pubMess":
+        pubMess($config);
+        break;
+    default:
+        displayJson("invalid action", "", "", $config);
+        break;
+}
 
+/**
+ * Create an MQTT connection
+ */
+function getMQTT(array $config): ?phpMQTT {
+    if (empty($config["server"]) || empty($config["port"])) {
+        return null; // invalid
+    }
+    return new phpMQTT(
+        $config["server"],
+        (int) $config["port"],
+        $config["identifier"],
+        $config["userName"] ?? "",
+        $config["password"] ?? ""
+    );
+}
 
-	function getMQTT()
-	{
-		global $myServer, $myPort, $myUserName, $myPassword, $myIdentifier;
+/**
+ * Get messages from a topic
+ */
+function getTopic(array $config): void {
+    $topic = trim($_GET["topic"] ?? "");
 
-		if(($myServer == "not set" || $myPort == "not set") ||
-			($myUserName != "not set" && $myPassword == "not set" ))
-		{
-			// invalid details
-			return null;
-		}
-		else if($myUserName == "not set" && $myPassword == "not set" )
-		{
-			// connected with no ACL
-			return new phpMQTT($myServer, $myPort, $myIdentifier, "", "");
-		}
-		else
-		{
-			// connected with ACL
-			return new phpMQTT($myServer, $myPort, $myIdentifier,
-								$myUserName, $myPassword);
-		}
-	}
+    if ($topic === "") {
+        displayJson("invalid topic", "", "", $config);
+        return;
+    }
 
-	function validParam($paramName)
-	{
-		if(isset($_GET[$paramName]) && strlen(trim($_GET[$paramName])) > 0)
-		{
-			return true;
-		}
-		else
-		{
-			return false;
-		}
-	}
+    $mqtt = getMQTT($config);
+    if (!$mqtt || !$mqtt->connect()) {
+        displayJson("failed to connect", $topic, "", $config);
+        return;
+    }
 
-	function getTopic()
-	{
-		if (validParam("topic"))
-		{
-			$myTopic = $_GET["topic"];
+    $topics[$topic] = ["qos" => 0, "function" => "procmsg"];
+    $mqtt->subscribe($topics);
 
-			if(($mqtt = getMQTT()) == null)
-			{
-				displayJson("invalid connection details", $myTopic, "");
-				return -1;
-			}
-			else
-			{
-				// connected to MQTT
-			}
+    if ($mqtt->proc() === 0) {
+        displayJson("no message", $topic, "", $config);
+    }
+    $mqtt->close();
+}
 
-			if ($mqtt->connect())
-			{
-				$topics[$myTopic] = array("qos"=>0, "function"=>"procmsg");
-				$mqtt->subscribe($topics);
-				if($mqtt->proc() == 0)
-				{
-					displayJson("no message", $myTopic, "");
-				}
-				else
-				{
-					//displayJson("unknown error", $myTopic, "");
-				}
-				$mqtt->close();
-			}
-			else
-			{
-				displayJson("failed to connect", $myTopic, "");
-			}
-		}
-		else
-		{
-			displayJson("invalid topic", "", "");
-		}
-	}
+/**
+ * Publish a message
+ */
+function pubMess(array $config): void {
+    $topic   = trim($_GET["topic"]   ?? "");
+    $message = trim($_GET["message"] ?? "");
+    $retain  = ($_GET["retain"] ?? "false") === "true";
+    $qos     = 0;
 
-	function procmsg($topic,$message)
-	{
-		displayJson("ok", $topic, $message);
-	}
+    if ($topic === "" && $message === "") {
+        displayJson("invalid message & topic", "", "", $config);
+        return;
+    }
+    if ($topic === "") {
+        displayJson("invalid topic", "", $message, $config);
+        return;
+    }
+    if ($message === "") {
+        displayJson("invalid message", $topic, "", $config);
+        return;
+    }
 
-	function displayJson($status, $topic, $message)
-	{
-		global $myServer, $myPort, $myUserName, $myPassword, $myIdentifier;
+    $mqtt = getMQTT($config);
+    if (!$mqtt || !$mqtt->connect()) {
+        displayJson("failed to connect", $topic, $message, $config);
+        return;
+    }
 
-		$message = array ( "status" => $status,
-				"topic" => $topic, "message" => $message,
-				"server" => $myServer, "port"=>$myPort,
-				"userName"=>$myUserName, "password"=>$myPassword);
+    $mqtt->publish($topic, $message, $qos, $retain);
+    $mqtt->close();
+    displayJson("ok", $topic, $message, $config);
+}
 
-		echo json_encode($message);
-	}
+/**
+ * Message callback
+ */
+function procmsg($topic, $message): void {
+    displayJson("ok", $topic, $message, []);
+}
 
+/**
+ * Return JSON response
+ */
+function displayJson(string $status, string $topic, string $message, array $config): void {
+    // Do NOT expose password in output
+    $response = [
+        "status"   => $status,
+        "topic"    => $topic,
+        "message"  => $message,
+        "server"   => $config["server"],
+        "port"     => $config["port"],
+        "userName" => $config["userName"],
+        //"password" => $config["password"] // security risk!
+    ];
 
-	function pubMess()
-	{
-		$myTopic = $_GET["topic"];
-		$myMessage = $_GET["message"];
-		$myRetain = $_GET["retain"];
-
-		if($myRetain == "true") $myRetain = 1;
-		else $myRetain = 0;
-
-		$myQos = 0;
-
-		if (!validParam("message") & !validParam("topic"))
-		{
-			displayJson("invalid message & topic", "", "");
-		}
-		else if (!validParam("message"))
-		{
-			displayJson("invalid message", $myTopic, "");
-		}
-		else if (!validParam("topic"))
-		{
-			displayJson("invalid topic", "", $myTopic);
-		}
-		else
-		{
-			if(($mqtt = getMQTT()) == null)
-			{
-				displayJson("invalid connection details", $myTopic, $myMessage);
-				return -1;
-			}
-
-			if ($mqtt->connect())
-			{
-				$mqtt->publish($myTopic,$myMessage,$myQos,$myRetain);
-				displayJson("ok", $myTopic, $myMessage);
-			}
-			else
-			{
-				displayJson("failed to connect", $myTopic, $myMessage);
-			}
-		}
-	}
-?>
+    header("Content-Type: application/json");
+    echo json_encode($response);
+}
